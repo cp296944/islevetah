@@ -121,6 +121,48 @@ def parse_date(value):
     dt = datetime.fromisoformat(value)
     return dt.replace(tzinfo=TZ) if dt.tzinfo is None else dt.astimezone(TZ)
 
+def manage_product_option(db, user, data):
+    kind, action = data.get('kind'), data.get('action')
+    if kind not in ('unit','category') or action not in ('create','rename','merge','delete'):
+        raise APIError(400,'無效的分類或單位操作')
+    def option_text(key):
+        value = data.get(key)
+        if not isinstance(value,str) or not value.strip() or len(value.strip())>1000:
+            raise APIError(400,'名稱必填，且不得超過 1000 字')
+        return value.strip()
+    value = option_text('value')
+    exists = db.execute('SELECT 1 FROM product_options WHERE kind=? AND value=?',(kind,value)).fetchone()
+    if action == 'create':
+        if exists:
+            raise APIError(409,'此名稱已存在，請沿用既有選項')
+        db.execute('INSERT INTO product_options(kind,value) VALUES(?,?)',(kind,value))
+        target, affected = '', 0
+    else:
+        if not exists:
+            raise APIError(404,'此選項不存在，請重新整理')
+        # kind is strictly allowlisted above; values always use SQL parameters.
+        affected = db.execute(f'SELECT COUNT(*) FROM products WHERE {kind}=?',(value,)).fetchone()[0]
+        target = ''
+        if action == 'delete':
+            if affected:
+                raise APIError(409,'仍有商品使用此選項（包含停用商品），請先合併或調整商品資料')
+        else:
+            target = option_text('target')
+            if target == value:
+                raise APIError(400,'新名稱或合併目標必須與原名稱不同')
+            target_exists = db.execute('SELECT 1 FROM product_options WHERE kind=? AND value=?',(kind,target)).fetchone()
+            if action == 'rename' and target_exists:
+                raise APIError(409,'此名稱已存在，請改用合併')
+            if action == 'merge' and not target_exists:
+                raise APIError(404,'合併目標不存在，請重新整理')
+            if kind == 'unit' and db.execute('SELECT 1 FROM counts c JOIN products p ON p.id=c.product_id WHERE p.unit=? LIMIT 1',(value,)).fetchone():
+                raise APIError(409,'此單位已有盤點紀錄，不可改名或合併，以保留歷史數量的意義')
+            if action == 'rename':
+                db.execute('INSERT INTO product_options(kind,value) VALUES(?,?)',(kind,target))
+            db.execute(f'UPDATE products SET {kind}=? WHERE {kind}=?',(target,value))
+        db.execute('DELETE FROM product_options WHERE kind=? AND value=?',(kind,value))
+    audit(db,user['id'],'product_option_'+action,json.dumps(dict(kind=kind,value=value,target=target,affected=affected),ensure_ascii=False))
+
 def estimate(records, now=None):
     now = now or datetime.now(TZ)
     rows = sorted(records, key=lambda r: parse_date(r['counted_at']))
@@ -407,10 +449,14 @@ class Handler(BaseHTTPRequestHandler):
                     raise APIError(403,'僅管理員可管理帳戶')
                 self.account_action(user,data)
                 return self.reply(200,{'ok':True})
-            self.require(user,{'/api/products':'products.manage','/api/products/delete':'products.manage','/api/counts':'counts.manage'}.get(path,'invalid'))
+            self.require(user,{'/api/products':'products.manage','/api/products/delete':'products.manage','/api/product-options':'products.manage','/api/counts':'counts.manage'}.get(path,'invalid'))
             with connect() as db:
                 db.execute('BEGIN IMMEDIATE')
-                if path == '/api/products':
+                if path == '/api/product-options':
+                    if not user['admin']:
+                        raise APIError(403,'僅管理員可管理分類與單位')
+                    manage_product_option(db,user,data)
+                elif path == '/api/products':
                     action = data.get('action')
                     if action not in (None,'create','update'):
                         raise APIError(400,'無效的商品操作')

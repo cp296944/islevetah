@@ -32,6 +32,7 @@ class APITests(unittest.TestCase):
         with server.connect() as db:
             db.execute('DELETE FROM counts')
             db.execute('DELETE FROM products')
+            db.execute('DELETE FROM product_options')
             db.execute('DELETE FROM sessions')
             db.execute('DELETE FROM audit')
             db.execute('DELETE FROM users')
@@ -80,6 +81,69 @@ class APITests(unittest.TestCase):
         state=self.call('/api/state')[1]
         self.assertEqual(len(state['products']),1)
         self.assertEqual(len(state['counts']),1)
+    def test_option_rename_merge_and_delete(self):
+        self.login()
+        for name,active in [('啟用商品',True),('停用商品',False)]:
+            self.assertEqual(self.call('/api/products',dict(name=name,unit='支',category='醫療用品',active=active))[0],200)
+        def option(action,value,**extra):
+            return self.call('/api/product-options',dict(kind='category',action=action,value=value,**extra))
+        self.assertEqual(option('delete','醫療用品')[0],409)
+        self.assertEqual(option('rename','醫療用品',target='醫療耗材')[0],200)
+        state=self.call('/api/state')[1]
+        self.assertEqual({p['category'] for p in state['products']},{'醫療耗材'})
+        self.assertNotIn('醫療用品',state['options']['category'])
+        self.assertEqual(option('create','清潔用品')[0],200)
+        self.assertEqual(option('rename','醫療耗材',target='清潔用品')[0],409)
+        self.assertEqual(option('merge','醫療耗材',target='清潔用品')[0],200)
+        state=self.call('/api/state')[1]
+        self.assertEqual({p['category'] for p in state['products']},{'清潔用品'})
+        self.assertEqual(len(state['products']),2)
+        self.assertNotIn('醫療耗材',state['options']['category'])
+        self.assertEqual(option('create','錯字分類')[0],200)
+        self.assertEqual(option('delete','錯字分類')[0],200)
+        server.initialize()
+        self.assertNotIn('錯字分類',self.call('/api/state')[1]['options']['category'])
+        with server.connect() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM audit WHERE action LIKE 'product_option_%'").fetchone()[0],5)
+    def test_option_unit_history_lock_and_validation(self):
+        self.login()
+        pid=self.product()
+        def option(action,value,**extra):
+            return self.call('/api/product-options',dict(kind='unit',action=action,value=value,**extra))
+        self.assertEqual(option('create','盒')[0],200)
+        self.assertEqual(option('rename','支',target='個')[0],200)
+        self.assertEqual(option('merge','個',target='盒')[0],200)
+        self.assertEqual(self.call('/api/state')[1]['products'][0]['unit'],'盒')
+        self.assertEqual(self.call('/api/counts',dict(counted_at='2026-05-01T09:00+08:00',items=[dict(product_id=pid,quantity=5)]))[0],200)
+        self.assertEqual(option('create','瓶')[0],200)
+        self.assertEqual(option('rename','盒',target='包')[0],409)
+        self.assertEqual(option('merge','盒',target='瓶')[0],409)
+        self.assertEqual(option('delete','盒')[0],409)
+        self.assertEqual(option('merge','瓶',target='不存在')[0],404)
+        self.assertEqual(option('rename','瓶',target='瓶')[0],400)
+        self.assertEqual(option('create','瓶')[0],409)
+        self.assertEqual(option('create',' ')[0],400)
+        self.assertEqual(option('create','x'*1001)[0],400)
+        self.assertEqual(self.call('/api/product-options',dict(kind='name',action='delete',value='盒'))[0],400)
+        state=self.call('/api/state')[1]
+        self.assertEqual(state['products'][0]['unit'],'盒')
+        self.assertEqual(len(state['counts']),1)
+        self.assertNotIn('包',state['options']['unit'])
+    def test_option_management_requires_admin_and_csrf(self):
+        self.login()
+        payload=dict(kind='category',action='create',value='管理員專用')
+        csrf=self.csrf
+        self.csrf='invalid'
+        self.assertEqual(self.call('/api/product-options',payload)[0],403)
+        self.csrf=csrf
+        self.assertEqual(self.call('/api/accounts',dict(action='create',username='manager',full_name='商品管理員',email='manager@example.com',phone='0912345678',password='123456',permissions=['products.manage']))[0],200)
+        status,session=self.call('/api/login',dict(username='manager',password='123456'))
+        self.assertEqual(status,200)
+        self.csrf=session['csrf']
+        self.assertEqual(self.call('/api/password',dict(current='123456',password='654321',confirm_password='654321'))[0],200)
+        status,session=self.call('/api/login',dict(username='manager',password='654321'))
+        self.csrf=session['csrf']
+        self.assertEqual(self.call('/api/product-options',payload)[0],403)
     def test_authentication(self):
         self.assertEqual(self.call('/api/state')[0],401)
         self.assertEqual(self.call('/api/login',{'username':'admin','password':'wrong'})[0],401)

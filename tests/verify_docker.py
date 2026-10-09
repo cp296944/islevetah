@@ -23,8 +23,8 @@ wait_health()
 for asset in ('/','/app.js','/style.css'):
     with client.open(BASE+asset,timeout=10) as response:
         assert response.status==200 and response.read(),asset
-subprocess.run(['docker','exec','islevetah-app','python','-c',"import server; server.create_admin('ci_admin','1234','CI Admin')"],check=True)
-session=call('login',{'username':'ci_admin','password':'1234'})
+subprocess.run(['docker','exec','islevetah-app','python','-c',"import server; server.create_admin('ci_admin','123456','CI Admin')"],check=True)
+session=call('login',{'username':'ci_admin','password':'123456'})
 csrf=session['csrf']
 call('products',{'name':'CI persistence sentinel','unit':'支'})
 state=call('state');pid=state['products'][0]['id']
@@ -32,7 +32,7 @@ call('counts',{'counted_at':'2026-01-01T09:00:00+08:00','items':[{'product_id':p
 version=call('ota/check',{})
 assert version['update_available'],version
 assert len(version['latest'])==40
-call('ota/apply',{'password':'1234'})
+call('ota/apply',{'password':'123456'})
 finished=None
 for _ in range(240):
     try:

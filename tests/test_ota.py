@@ -63,10 +63,10 @@ class OTATests(unittest.TestCase):
             u.download_source('a'*40,self.temp.name)
     def test_password_hash_not_plaintext(self):
         import server
-        hashed=server.password_hash('1234')
-        self.assertNotIn('1234',hashed)
-        self.assertTrue(server.password_matches('1234',hashed))
-        self.assertFalse(server.password_matches('5678',hashed))
-        with self.assertRaises(server.APIError):server.password_hash('123')
+        hashed=server.password_hash('123456')
+        self.assertNotIn('123456',hashed)
+        self.assertTrue(server.password_matches('123456',hashed))
+        self.assertFalse(server.password_matches('654321',hashed))
+        with self.assertRaises(server.APIError):server.password_hash('12345')
 
 if __name__=='__main__':unittest.main()

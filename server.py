@@ -29,8 +29,8 @@ class APIError(Exception):
         self.status, self.message = status, message
 
 def password_hash(password):
-    if not isinstance(password,str) or not 4 <= len(password) <= 256:
-        raise APIError(400,'密碼須為 4 至 256 個字元，不要求大小寫或特殊符號。')
+    if not isinstance(password,str) or not 6 <= len(password) <= 256:
+        raise APIError(400,'密碼須為 6 至 256 個字元，不要求大小寫或特殊符號。')
     salt = secrets.token_hex(16)
     hashed = hashlib.scrypt(password.encode(),salt=bytes.fromhex(salt),n=16384,r=8,p=1).hex()
     return salt+':'+hashed
@@ -54,14 +54,20 @@ def normalize_permissions(value):
     return json.dumps(sorted(perms))
 
 def contact(data):
+    if not all(isinstance(data.get(k),str) for k in ('username','full_name','email','phone')):
+        raise APIError(400,'帳號、姓名、Email 與手機必須填寫有效文字。')
     username = str(data.get('username','')).strip()
     full_name = str(data.get('full_name','')).strip()
     email = str(data.get('email','')).strip()
     phone = str(data.get('phone','')).strip()
     if not re.fullmatch(r'[A-Za-z0-9_.-]{3,64}',username):
         raise APIError(400,'帳號須為 3 至 64 個英數字或 _ . -。')
-    if not full_name or len(full_name)>100 or not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',email) or len(email)>254 or not re.fullmatch(r'[+0-9() -]{6,30}',phone):
-        raise APIError(400,'請填寫姓名、有效 Email 與手機號碼。')
+    if not full_name or len(full_name)>100:
+        raise APIError(400,'姓名必填，且不得超過 100 個字元。')
+    if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',email) or len(email)>254:
+        raise APIError(400,'請填寫有效 Email，且不得超過 254 個字元。')
+    if not re.fullmatch(r'[+0-9() -]{6,30}',phone) or len(re.sub(r'\D','',phone))<6:
+        raise APIError(400,'請填寫有效手機號碼，至少包含 6 個數字，最多 30 個字元。')
     return username,full_name,email,phone
 
 def audit(db, actor, action, target=''):
@@ -253,6 +259,15 @@ class Handler(BaseHTTPRequestHandler):
             target=db.execute('SELECT * FROM users WHERE id=?',(uid,)).fetchone()
             if not target:
                 raise APIError(404,'找不到帳號')
+            if action=='profile':
+                fields=contact(data)
+                if db.execute('SELECT 1 FROM users WHERE username=? AND id!=?',(fields[0],uid)).fetchone():
+                    raise APIError(409,'帳號名稱已有人使用，請使用其他名稱。')
+                db.execute('UPDATE users SET username=?,full_name=?,email=?,phone=? WHERE id=?',(*fields,uid))
+                if fields[0]!=target['username']:
+                    db.execute('DELETE FROM sessions WHERE user_id=?',(uid,))
+                audit(db,user['id'],'user_profile',json.dumps({'id':uid,'old_username':target['username'],'username':fields[0]},ensure_ascii=False))
+                return
             if action in ('approve','reject'):
                 if target['approval']=='approved':
                     raise APIError(400,'已核准的帳號請使用啟用或停用管理')
@@ -443,7 +458,7 @@ if __name__ == '__main__':
     initialize()
     if args.init_admin:
         try:
-            password=getpass.getpass('管理員密碼（至少 4 個字元）：')
+            password=getpass.getpass('管理員密碼（6 至 256 個字元）：')
             if password!=getpass.getpass('再次輸入密碼：'):
                 raise APIError(400,'兩次密碼不一致')
             create_admin(args.init_admin,password,args.init_admin)

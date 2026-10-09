@@ -71,6 +71,7 @@ docker logs --tail 60 islevetah-ota
 
 - SSH 連不上：檢查 DSM SSH、22 埠與同區網連線。
 - 7788 被占用：先查 `docker ps` 或 `netstat -lnt`，不要停止不明服務。
+- `Permission denied /app/server.py`：舊映像未正規化 NAS 原始碼權限。下載最新 Dockerfile 並只重建 app；新版映像會將程式目錄設定 755、程式檔 644，仍用 UID 10001 執行。
 - Docker 不存在：安裝／啟動 Container Manager；檢查 `docker compose version` 或 `docker-compose version`。
 - 網頁連不上但 health 正常：檢查 DSM 防火牆允許院內網路連入 TCP 7788；不需設定路由器對外轉發。
 - 帳號不能登入：檢查已核准、啟用與密碼。暫時密碼會要求先修改。登入失敗達限制須等待 15 分鐘。

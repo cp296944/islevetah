@@ -22,6 +22,9 @@ jobs:
         run: |
           mkdir -p data ota-state
           sudo chown 10001:10001 data
+          # Reproduce restrictive source modes seen on Synology NAS.
+          chmod 600 server.py public/*
+          chmod 700 public
           docker compose -p islevetah build
           docker compose -p islevetah up -d
           python tests/verify_docker.py

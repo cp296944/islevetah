@@ -20,6 +20,9 @@ def wait_health():
         time.sleep(2)
     raise RuntimeError('Container startup timed out')
 wait_health()
+for asset in ('/','/app.js','/style.css'):
+    with client.open(BASE+asset,timeout=10) as response:
+        assert response.status==200 and response.read(),asset
 subprocess.run(['docker','exec','islevetah-app','python','-c',"import server; server.create_admin('ci_admin','1234','CI Admin')"],check=True)
 session=call('login',{'username':'ci_admin','password':'1234'})
 csrf=session['csrf']

@@ -111,6 +111,8 @@ def initialize():
         CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,username TEXT UNIQUE NOT NULL,password TEXT NOT NULL,full_name TEXT NOT NULL,email TEXT NOT NULL DEFAULT '',phone TEXT NOT NULL DEFAULT '',admin INTEGER NOT NULL DEFAULT 0,active INTEGER NOT NULL DEFAULT 0,approval TEXT NOT NULL DEFAULT 'pending',must_change INTEGER NOT NULL DEFAULT 0,permissions TEXT NOT NULL DEFAULT '[]',created_at INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,user_id INTEGER NOT NULL REFERENCES users(id),csrf TEXT NOT NULL,expires INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS attempts(key TEXT PRIMARY KEY,count INTEGER NOT NULL,until INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS count_revisions(id INTEGER PRIMARY KEY,count_id INTEGER NOT NULL REFERENCES counts(id) ON DELETE CASCADE,actor INTEGER NOT NULL REFERENCES users(id),at TEXT NOT NULL,reason TEXT NOT NULL,before_json TEXT NOT NULL,after_json TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS count_revisions_count ON count_revisions(count_id,id);
         CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY,at INTEGER NOT NULL,actor INTEGER REFERENCES users(id),action TEXT NOT NULL,target TEXT NOT NULL DEFAULT '');
         """)
         columns = {r['name'] for r in db.execute('PRAGMA table_info(counts)')}
@@ -366,6 +368,11 @@ class Handler(BaseHTTPRequestHandler):
                     with connect() as db:
                         products = [dict(r) for r in db.execute('SELECT * FROM products ORDER BY id DESC')]
                         counts = [dict(r) for r in db.execute('SELECT * FROM counts ORDER BY counted_at DESC')]
+                        revisions = {}
+                        for revision in db.execute('SELECT cr.*,u.full_name AS actor_name FROM count_revisions cr JOIN users u ON u.id=cr.actor ORDER BY cr.id DESC'):
+                            revisions.setdefault(revision['count_id'],[]).append(dict(revision))
+                        for r in counts:
+                            r['revisions'] = revisions.get(r['id'],[])
                         options = {kind: [r['value'] for r in db.execute('SELECT value FROM product_options WHERE kind=? ORDER BY value',(kind,))] for kind in ('unit','category')}
                     for p in products:
                         p['estimate'] = estimate([r for r in counts if r['product_id']==p['id']])
@@ -449,7 +456,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise APIError(403,'僅管理員可管理帳戶')
                 self.account_action(user,data)
                 return self.reply(200,{'ok':True})
-            self.require(user,{'/api/products':'products.manage','/api/products/delete':'products.manage','/api/product-options':'products.manage','/api/counts':'counts.manage'}.get(path,'invalid'))
+            self.require(user,{'/api/products':'products.manage','/api/products/delete':'products.manage','/api/product-options':'products.manage','/api/counts':'counts.manage','/api/counts/edit':'counts.manage'}.get(path,'invalid'))
             with connect() as db:
                 db.execute('BEGIN IMMEDIATE')
                 if path == '/api/product-options':
@@ -488,6 +495,27 @@ class Handler(BaseHTTPRequestHandler):
                         raise APIError(409,'已有盤點紀錄的商品不可刪除，請改用停用以保留歷史紀錄')
                     db.execute('DELETE FROM products WHERE id=?',(pid,))
                     audit(db,user['id'],'product_delete',json.dumps({'id':pid,'name':product['name']},ensure_ascii=False))
+                elif path == '/api/counts/edit':
+                    old = db.execute('SELECT * FROM counts WHERE id=?',(int(data['id']),)).fetchone()
+                    if not old:
+                        raise APIError(404,'找不到盤點紀錄')
+                    if not user['admin'] and old['user_id'] != user['id']:
+                        raise APIError(403,'只能更正自己的盤點紀錄')
+                    before = dict(old)
+                    if data.get('expected') != {k:before[k] for k in ('quantity','counted_at','note')}:
+                        raise APIError(409,'紀錄已被其他人更正，請重新載入後再修改')
+                    reason = data.get('reason','')
+                    note = data.get('note','')
+                    if not isinstance(reason,str) or not reason.strip() or len(reason)>1000 or not isinstance(note,str) or len(note)>1000:
+                        raise APIError(400,'請填寫更正原因；原因與備註最多 1000 字')
+                    at = parse_date(data['counted_at'])
+                    quantity = float(data['quantity'])
+                    if at > datetime.now(TZ) or not math.isfinite(quantity) or quantity < 0 or quantity > 1e12:
+                        raise APIError(400,'請確認盤點時間及非負數量')
+                    db.execute('UPDATE counts SET quantity=?,counted_at=?,note=? WHERE id=?',(quantity,at.isoformat(),note,old['id']))
+                    after = dict(db.execute('SELECT * FROM counts WHERE id=?',(old['id'],)).fetchone())
+                    db.execute('INSERT INTO count_revisions(count_id,actor,at,reason,before_json,after_json) VALUES(?,?,?,?,?,?)',(old['id'],user['id'],datetime.now(TZ).isoformat(),reason.strip(),json.dumps(before,ensure_ascii=False),json.dumps(after,ensure_ascii=False)))
+                    audit(db,user['id'],'count_edit',old['id'])
                 elif path == '/api/counts':
                     person = user['full_name'] or user['username']
                     at = parse_date(data['counted_at'])

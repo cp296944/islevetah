@@ -53,6 +53,50 @@ class APITests(unittest.TestCase):
     def product(self):
         self.assertEqual(self.call('/api/products',{'name':'30CC 針筒','unit':'支','barcode':'123'})[0],200)
         return self.call('/api/state')[1]['products'][0]['id']
+    def test_count_corrections_permissions_audit_and_conflicts(self):
+        self.login()
+        pid=self.product()
+        self.assertEqual(self.call('/api/counts',dict(counted_at='2026-05-01T09:00+08:00',items=[dict(product_id=pid,quantity=10)]))[0],200)
+        original=self.call('/api/state')[1]['counts'][0]
+        expected={k:original[k] for k in ('quantity','counted_at','note')}
+        edit=dict(id=original['id'],expected=expected,quantity=8,counted_at=original['counted_at'],note='修正',reason='誤輸入')
+        self.assertEqual(self.call('/api/counts/edit',{**edit,'reason':' '})[0],400)
+        self.assertEqual(self.call('/api/counts/edit',{**edit,'quantity':-1})[0],400)
+        self.assertEqual(self.call('/api/counts/edit',{**edit,'counted_at':'2999-01-01T00:00+08:00'})[0],400)
+        staff=self.create_staff()
+        with server.connect() as db:
+            db.execute('UPDATE users SET permissions=? WHERE id=?',('["inventory.view","counts.manage"]',staff))
+        self.call('/api/logout',{})
+        self.csrf=self.call('/api/login',dict(username='staff',password='123456'))[1]['csrf']
+        self.assertEqual(self.call('/api/counts/edit',edit)[0],403)
+        self.assertEqual(self.call('/api/counts',dict(counted_at='2026-05-02T09:00+08:00',items=[dict(product_id=pid,quantity=6)]))[0],200)
+        own=self.call('/api/state')[1]['counts'][0]
+        own_edit={**edit,'id':own['id'],'expected':{k:own[k] for k in expected},'counted_at':own['counted_at'],'quantity':4}
+        self.assertEqual(self.call('/api/counts/edit',own_edit)[0],200)
+        self.assertEqual(self.call('/api/counts/edit',own_edit)[0],409)
+        self.call('/api/logout',{})
+        self.login()
+        self.assertEqual(self.call('/api/counts/edit',edit)[0],200)
+        result=self.call('/api/state')[1]
+        row=next(r for r in result['counts'] if r['id']==original['id'])
+        self.assertEqual(row['person'],original['person'])
+        self.assertEqual(row['user_id'],original['user_id'])
+        self.assertEqual(row['quantity'],8)
+        revision=row['revisions'][0]
+        self.assertEqual(json.loads(revision['before_json'])['quantity'],10)
+        self.assertEqual(json.loads(revision['after_json'])['quantity'],8)
+        self.assertEqual(revision['reason'],'誤輸入')
+        self.assertEqual(result['products'][0]['estimate']['latest']['quantity'],4)
+        conflict={**own_edit,'expected':{'quantity':4,'counted_at':own['counted_at'],'note':'修正'},'counted_at':original['counted_at']}
+        self.assertEqual(self.call('/api/counts/edit',conflict)[0],409)
+        with server.connect() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM count_revisions').fetchone()[0],2)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM audit WHERE action='count_edit'").fetchone()[0],2)
+            db.execute('UPDATE counts SET user_id=NULL WHERE id=?',(original['id'],))
+        self.call('/api/logout',{})
+        self.csrf=self.call('/api/login',dict(username='staff',password='123456'))[1]['csrf']
+        self.assertEqual(self.call('/api/counts/edit',edit)[0],403)
+
     def test_product_create_options_delete(self):
         self.login()
         for name in ('第一項','第二項'):

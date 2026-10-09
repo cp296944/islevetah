@@ -1,0 +1,5 @@
+services:
+  ota:
+    volumes:
+      - ./tests/ota_ci.py:/app/ota_ci.py:ro
+    command: [python, ota_ci.py]

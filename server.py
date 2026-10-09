@@ -154,7 +154,7 @@ def ota_request(action):
     token=os.environ.get('OTA_INTERNAL_TOKEN')
     if not token:
         raise APIError(503,'此環境尚未設定 NAS OTA 服務')
-    req=Request('http://ota:7790/'+action,headers={'Authorization':'Bearer '+token},data=b'{}' if action in ('check','apply') else None)
+    req=Request('http://ota:7790/'+action,headers={'Authorization':'Bearer '+token},data=b'{}' if action in ('check','apply','cleanup') else None)
     try:
         with urlopen(req,timeout=35) as response:
             return json.load(response)
@@ -303,11 +303,11 @@ class Handler(BaseHTTPRequestHandler):
                     with connect() as db:
                         db.execute('SELECT 1').fetchone()
                     return self.reply(200,{'ok':True})
-                if path=='/api/ota/status':
+                if path in ('/api/ota/status','/api/ota/cleanup-preview'):
                     self.require(user)
                     if not user['admin']:
                         raise APIError(403,'僅管理員可查看更新')
-                    return self.reply(200,ota_request('status'))
+                    return self.reply(200,ota_request('cleanup-preview' if path.endswith('/cleanup-preview') else 'status'))
                 if path=='/api/accounts':
                     self.require(user)
                     if not user['admin']:
@@ -389,15 +389,15 @@ class Handler(BaseHTTPRequestHandler):
                     audit(db,user['id'],'password_changed')
                 return self.session_response({'ok':True},COOKIE+'=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0')
             self.require(user)
-            if path in ('/api/ota/check','/api/ota/apply'):
+            if path in ('/api/ota/check','/api/ota/apply','/api/ota/cleanup'):
                 if not user['admin']:
                     raise APIError(403,'僅管理員可執行更新')
-                if path.endswith('/apply'):
+                if path.endswith(('/apply','/cleanup')):
                     if not password_matches(data.get('password',''),user['password']):
                         raise APIError(400,'管理員密碼不正確')
                     with connect() as db:
-                        audit(db,user['id'],'ota_apply')
-                return self.reply(200,ota_request('apply' if path.endswith('/apply') else 'check'))
+                        audit(db,user['id'],'ota_cleanup' if path.endswith('/cleanup') else 'ota_apply')
+                return self.reply(202 if path.endswith('/apply') else 200,ota_request(path.rsplit('/',1)[1]))
             if path=='/api/accounts':
                 if not user['admin']:
                     raise APIError(403,'僅管理員可管理帳戶')

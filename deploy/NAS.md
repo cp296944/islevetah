@@ -54,7 +54,7 @@ docker exec -it islevetah-app python server.py --init-admin admin
 
 管理員 → OTA 更新 → 檢查新版 → 輸入目前管理員密碼 → 勾選已通知盤點人員 → 套用新版。
 
-更新頁會顯示進度，網站重啟時自動重試連線。更新前備份在 `/volume3/islevet/data/backups/`；停止的舊容器以 `islevetah-app-rollback-...` 保留。備份與舊映像沒有自動清理政策，確認新版及備份可用後才人工清理。
+更新頁會顯示進度，網站重啟時自動重試連線。更新前備份在 `/volume3/islevet/data/backups/`；新版通過健康及首頁檢查後刪除停止的舊容器，上一版映像以 `islevetah-app:rollback-任務ID` 保留。舊映像提供有範圍的清理預覽；資料庫備份仍保留，由管理員依備份政策處理。
 
 更新 OTA 引擎、Compose 或部署設定時，重做第 3 步。已有管理員不必重做第 4 步。
 
@@ -75,7 +75,7 @@ docker logs --tail 60 islevetah-ota
 - Docker 不存在：安裝／啟動 Container Manager；檢查 `docker compose version` 或 `docker-compose version`。
 - 網頁連不上但 health 正常：檢查 DSM 防火牆允許院內網路連入 TCP 7788；不需設定路由器對外轉發。
 - 帳號不能登入：檢查已核准、啟用與密碼。暫時密碼會要求先修改。登入失敗達限制須等待 15 分鐘。
-- OTA 無法下載：確認 NAS 可連線 GitHub 與 Docker Hub；來源儲存庫須保持公開。
+- OTA 無法下載：確認 NAS 可連線 GHCR；app 映像套件須設為公開。首次切換須先透過 SSH 升級 OTA 引擎。
 - 不分享 `.env`、完整 `docker inspect` 或 `docker compose config` 輸出，這些可能包含內部 token。
 
 ## 8. 備份與回復

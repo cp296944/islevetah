@@ -14,7 +14,7 @@
 - 密碼接受 **6 至 256 個字元**，允許純數字，不要求大小寫或符號；使用 scrypt 雜湊保存。
 - 管理員建立或重設的暫時密碼，首次登入須更換。修改密碼、停用或更改權限會撤銷登入；至少保留一位啟用管理員。
 - 保持登入：勾選 30 天；未勾選為瀏覽器工作階段 Cookie，後端最多 8 小時。SQLite 保存 session，重啟或 OTA 不會自行遺失登入。
-- OTA：管理員檢查 GitHub main 新版，輸入目前管理員密碼後套用；更新前備份 SQLite，健康檢查失敗時自動還原資料及舊容器。
+- OTA：管理員檢查 GHCR 映像摘要，輸入目前管理員密碼後套用；更新前備份 SQLite，健康檢查失敗時自動還原資料及舊容器。
 - CSV 匯出；全部時間使用台灣 UTC+8。
 
 只有一筆盤點或沒有有效區間時不估算；零耗用不推算用盡日期。期間補貨但最後庫存仍下降時無法辨識，請依總覽的最後實際盤點數量人工判斷。
@@ -43,10 +43,18 @@ docker exec -it islevetah-app python server.py --init-admin admin
 - `/volume3/islevet/data/inventory.db` 同時保存商品、盤點、帳戶、登入與稽核。
 - `/volume3/islevet/.env` 保存隨機內部 OTA token，首次安裝自動產生；重裝保留，不需人工填寫。
 - `/volume3/islevet/data/backups/` 保存 OTA 前一致性 SQLite 備份；資料夾及檔案不得公開。
-- `/volume3/islevet/ota-state/` 保存更新結果；舊容器以 `islevetah-app-rollback-...` 名稱保留。
+- `/volume3/islevet/ota-state/` 保存更新結果；任務附識別碼、階段、下載量、經過時間與還原結果；上一版映像以 `islevetah-app:rollback-任務ID` 保留。
 - 備份、.env、SQLite 與實際員工資料不提交 GitHub。
 
-更新時先下載固定 Git commit 的公開原始碼，於 NAS 建置新版；建置期間網站繼續運作。新版建置成功後才停舊版、備份資料、啟動新版及驗證。網路或建置失敗不會停止網站。OTA 只更新網站容器，更新 OTA 引擎本身須重新執行 SSH 安裝腳本。腳本保留資料與 .env，但腳本部署失敗需依部署說明人工檢查；自動還原限網站 OTA。
+檢查更新只讀取 `ghcr.io/cp296944/islevetah-app:latest` 的遠端摘要，不下載映像。套用時使用已確認的 `sha256` 摘要下載，下載期間網站可使用。舊映像保留成功後，才停網站、備份 SQLite、啟動新版；必須通過 `/api/health` Docker 健康檢查及首頁入口檢查，才刪除舊容器。失敗還原資料庫與舊容器。
+
+更新成功後只清理有 `io.islevetah.ota.managed=app` 標記且無人工標籤的本系統歷史映像；保留容器使用中映像、上一版 rollback 及人工保留標籤。頁面提供清理預覽與管理員密碼確認。預估容量未扣除共用層，實際釋放可能較少；來源不明映像只列人工確認。不使用強制映像刪除或全域 prune。
+
+這次同時修改 app 與 OTA 引擎，既有 NAS 第一次必須透過 SSH 執行 `deploy/install.sh` 更新引擎（保留資料及 .env），之後網站才走映像 OTA。GHCR 的 app 套件須設定為公開，否則檢查／下載將明確失敗。OTA 引擎自身及 Compose、掛載設定使用獨立 SSH 部署，不由網站 OTA 替換。
+
+GitHub Actions 依 push 的完整差異判定受影響服務：`server.py`、`public/`、app Dockerfile 只發布 app；`ota/` 只發布 updater。發布流程設定變更重建兩者；文件與測試不發布。版本以映像摘要為準，不以整個專案 commit 判斷。
+
+重新整理頁面會重新查詢持久化任務，入口中斷自動重試。更新引擎重新啟動時，把未完成任務標記中斷，禁止直接再次更新或清理。管理員須先在 SSH 確認網站健康、容器及資料庫版本；備份 `ota-state/job.json` 後移走此檔，重啟 OTA 引擎解除阻擋。不要在仍有工作執行時手動解除。
 
 OTA 容器為了替換網站容器，持有 NAS Docker socket 管理權；沒有外部埠，須通過網站管理員權限、CSRF 與內部 token。不要把內部更新服務對外公開。
 
@@ -69,7 +77,7 @@ python -m unittest discover -s tests -v
 node --check public/app.js
 ```
 
-GitHub Actions 另外使用真實 Docker 驗證啟動、GitHub 新版下載、OTA 替換、備份，以及帳戶／session／盤點資料保留。
+GitHub Actions 另外使用真實 Docker 驗證啟動、固定映像 ID 的 OTA 替換、備份，以及帳戶／session／盤點資料保留。
 
 盤點更正目前需管理者處理 SQLite，後續可加入保留稽核歷史的更正功能。GitHub Pages 無法執行此共用後端；GitHub 用於程式碼與更新來源，實際服務執行於 NAS。
 
@@ -77,6 +85,6 @@ GitHub Actions 另外使用真實 Docker 驗證啟動、GitHub 新版下載、OT
 
 PR 合併至 main 並通過 Inventory checks 後，Publish app image 才會發布網站映像：`ghcr.io/cp296944/islevetah-app:latest` 與 `sha-完整GitSHA`。建置標示同一已驗證 commit，發布紀錄包含映像 digest。
 
-帳號資料編輯與密碼規則這次只需更新 **app / islevetah-app**，OTA 引擎不需更新。既有 NAS 仍使用 OTA 從 GitHub 原始碼建置；映像發布增加可追蹤版本，不會更換既有 NAS 的更新方式。
+帳號資料編輯與密碼規則這次只需更新 **app / islevetah-app**，OTA 引擎不需更新。本次 OTA 引擎升級後改用固定映像摘要下載。
 
 NAS 若仍因 `/app/server.py` 權限錯誤而無法啟動，先下載最新 Dockerfile 並只重建 app，恢復網站後才能透過 OTA 更新帳戶功能。詳見部署說明與 [更新紀錄](CHANGELOG.md)。

@@ -1,31 +1,56 @@
-name: Publish app image
+name: Publish affected images
 on:
-  workflow_run:
-    workflows: [Inventory checks]
-    types: [completed]
+  push:
     branches: [main]
+    paths:
+      - server.py
+      - public/**
+      - Dockerfile
+      - .dockerignore
+      - ota/**
+      - .github/workflows/publish-app.yml
 permissions:
   contents: read
   packages: write
 concurrency:
-  group: publish-islevetah-app
+  group: publish-islevetah
   cancel-in-progress: false
 jobs:
   publish:
-    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install docker==7.1.0
+      - run: python -m unittest discover -s tests -v
+      - run: node --check public/app.js
+      - name: Determine affected services
+        id: changed
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            git ls-files > /tmp/changed-files
+          else
+            git diff --name-only "$BEFORE" "$GITHUB_SHA" > /tmp/changed-files
+          fi
+          if grep -Eq '^(server.py|public/|Dockerfile|.dockerignore|.github/workflows/publish-app.yml)' /tmp/changed-files; then echo 'app=true' >> "$GITHUB_OUTPUT"; fi
+          if grep -Eq '^(ota/|.github/workflows/publish-app.yml)' /tmp/changed-files; then echo 'ota=true' >> "$GITHUB_OUTPUT"; fi
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and publish verified app image
-        id: image
+      - name: Publish app
+        if: steps.changed.outputs.app == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -34,12 +59,15 @@ jobs:
           push: true
           tags: |
             ghcr.io/cp296944/islevetah-app:latest
-            ghcr.io/cp296944/islevetah-app:sha-${{ github.event.workflow_run.head_sha }}
-          build-args: |
-            APP_VERSION=${{ github.event.workflow_run.head_sha }}
-      - name: Record published version
-        env:
-          REVISION: ${{ github.event.workflow_run.head_sha }}
-          DIGEST: ${{ steps.image.outputs.digest }}
-        run: |
-          printf 'Published app revision: %s\nImage digest: %s\nService to update: app (islevetah-app)\n' "$REVISION" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"
+            ghcr.io/cp296944/islevetah-app:sha-${{ github.sha }}
+          build-args: APP_VERSION=${{ github.sha }}
+      - name: Publish updater for independent deployment
+        if: steps.changed.outputs.ota == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./ota
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/cp296944/islevetah-ota:latest
+            ghcr.io/cp296944/islevetah-ota:sha-${{ github.sha }}

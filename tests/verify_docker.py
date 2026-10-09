@@ -1,4 +1,4 @@
-"""CI-only real Docker startup, GitHub OTA, backup and persistence verification."""
+"""CI-only real Docker startup, immutable-image OTA, backup and persistence verification."""
 import json
 import subprocess
 import time
@@ -30,9 +30,11 @@ call('products',{'name':'CI persistence sentinel','unit':'支'})
 state=call('state');pid=state['products'][0]['id']
 call('counts',{'counted_at':'2026-01-01T09:00:00+08:00','items':[{'product_id':pid,'quantity':50}]})
 version=call('ota/check',{})
-assert version['update_available'],version
-assert len(version['latest'])==40
-call('ota/apply',{'password':'123456'})
+assert version['latest'].startswith('sha256:')
+if version['update_available']:
+    call('ota/apply',{'password':'123456'})
+else:
+    raise RuntimeError('CI bootstrap image unexpectedly matches published app')
 finished=None
 for _ in range(240):
     try:

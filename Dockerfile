@@ -2,6 +2,7 @@ FROM python:3.12-slim
 ARG APP_VERSION=development
 LABEL org.opencontainers.image.source="https://github.com/cp296944/islevetah"
 LABEL org.opencontainers.image.revision=$APP_VERSION
+LABEL io.islevetah.ota.managed="app"
 ENV APP_VERSION=$APP_VERSION PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 INVENTORY_DB=/data/inventory.db
 WORKDIR /app
 COPY server.py ./

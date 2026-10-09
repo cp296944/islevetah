@@ -26,7 +26,8 @@ jobs:
           chmod 600 server.py public/*
           chmod 700 public
           docker compose -p islevetah build
-          docker compose -p islevetah up -d
+          docker compose -p islevetah -f docker-compose.yml -f tests/compose-ci.yml up -d
+          docker build --build-arg APP_VERSION=ci-target -t islevetah-app:ci-target .
           python tests/verify_docker.py
       - name: Container diagnostics on failure
         if: failure()

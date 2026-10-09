@@ -5,12 +5,12 @@ LABEL org.opencontainers.image.revision=$APP_VERSION
 LABEL io.islevetah.ota.managed="app"
 ENV APP_VERSION=$APP_VERSION PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 INVENTORY_DB=/data/inventory.db
 WORKDIR /app
-COPY server.py ./
+COPY server.py CHANGELOG.md ./
 COPY public ./public
 # NAS source files may arrive with owner-only modes. Normalize image permissions
 # before dropping privileges; runtime data keeps its separate private permissions.
 RUN chmod 755 /app \
-    && chmod 644 /app/server.py \
+    && chmod 644 /app/server.py /app/CHANGELOG.md \
     && find /app/public -type d -exec chmod 755 {} + \
     && find /app/public -type f -exec chmod 644 {} + \
     && mkdir /data && chown 10001:10001 /data

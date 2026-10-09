@@ -13,7 +13,8 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from functools import lru_cache
+from urllib.parse import urlparse, parse_qs
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
@@ -199,6 +200,51 @@ def estimate(records, now=None, low_stock_days=5):
             remaining = (depletion-now).total_seconds()/86400
     return dict(latest=latest, daily=daily, weekly=daily*7 if daily is not None else None, depletion=depletion.isoformat() if depletion else None, remaining=remaining, status=status, valid_intervals=len(selected), excluded_intervals=excluded)
 
+def changelog_entries(text):
+    entries=[]
+    for section in re.split(r'^## ',text,flags=re.MULTILINE)[1:]:
+        title,_,body=section.partition('\n')
+        entries.append({'title':title.strip(),'content':body.strip()})
+    return entries
+
+def release_json(url, token=None):
+    headers={'User-Agent':'islevetah-release-notes','Accept':'application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json'}
+    if token:headers['Authorization']='Bearer '+token
+    with urlopen(Request(url,headers=headers),timeout=15) as response:
+        raw=response.read(2*1024*1024+1)
+    if len(raw)>2*1024*1024:raise ValueError('Metadata too large')
+    return json.loads(raw)
+
+@lru_cache(maxsize=16)
+def release_notes(digest):
+    if not re.fullmatch(r'sha256:[a-f0-9]{64}',digest):
+        raise APIError(400,'映像摘要格式不正確，請重新檢查更新')
+    try:
+        repository='cp296944/islevetah-app'
+        token=release_json('https://ghcr.io/token?service=ghcr.io&scope=repository:'+repository+':pull')['token']
+        base='https://ghcr.io/v2/'+repository
+        manifest=release_json(base+'/manifests/'+digest,token)
+        if 'manifests' in manifest:
+            platform=next(m for m in manifest['manifests'] if m.get('platform',{}).get('os')=='linux' and m.get('platform',{}).get('architecture')=='amd64')
+            platform_digest=platform['digest']
+            if not re.fullmatch(r'sha256:[a-f0-9]{64}',platform_digest):raise ValueError('Invalid platform digest')
+            manifest=release_json(base+'/manifests/'+platform_digest,token)
+        config_digest=manifest['config']['digest']
+        if not re.fullmatch(r'sha256:[a-f0-9]{64}',config_digest):raise ValueError('Invalid config digest')
+        labels=release_json(base+'/blobs/'+config_digest,token)['config']['Labels']
+        revision=labels.get('org.opencontainers.image.revision','')
+        if labels.get('org.opencontainers.image.source')!='https://github.com/cp296944/islevetah' or not re.fullmatch(r'[a-f0-9]{40}',revision):raise ValueError('Invalid image source')
+        url='https://raw.githubusercontent.com/cp296944/islevetah/'+revision+'/CHANGELOG.md'
+        with urlopen(Request(url,headers={'User-Agent':'islevetah-release-notes'}),timeout=15) as response:
+            raw=response.read(2*1024*1024+1)
+        if len(raw)>2*1024*1024:raise ValueError('Changelog too large')
+        entries=changelog_entries(raw.decode('utf-8'))
+        if not entries:raise ValueError('No release notes')
+        return {'revision':revision,'entries':entries,'source_url':url}
+    except APIError:raise
+    except (URLError,TimeoutError,ValueError,KeyError,StopIteration,OSError):
+        raise APIError(503,'無法取得本版更新內容，請稍後重試；不影響更新操作')
+
 def ota_request(action):
     token=os.environ.get('OTA_INTERNAL_TOKEN')
     if not token:
@@ -352,6 +398,13 @@ class Handler(BaseHTTPRequestHandler):
                     with connect() as db:
                         db.execute('SELECT 1').fetchone()
                     return self.reply(200,{'ok':True})
+                if path=='/api/ota/release-notes':
+                    self.require(user)
+                    if not user['admin']:raise APIError(403,'僅管理員可查看更新內容')
+                    digest=parse_qs(urlparse(self.path).query).get('digest',[''])[0]
+                    if digest:return self.reply(200,release_notes(digest))
+                    changelog=ROOT/'CHANGELOG.md'
+                    return self.reply(200,{'revision':os.environ.get('APP_VERSION','development'),'entries':changelog_entries(changelog.read_text(encoding='utf-8')) if changelog.is_file() else []})
                 if path in ('/api/ota/status','/api/ota/cleanup-preview'):
                     self.require(user)
                     if not user['admin']:

@@ -11,5 +11,26 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - run: python -m pip install docker==7.1.0
       - run: python -m unittest discover -s tests -v
       - run: node --check public/app.js
+      - name: Build and verify NAS containers
+        env:
+          OTA_INTERNAL_TOKEN: ci-isolated-test-token
+          APP_VERSION: ci-bootstrap
+        run: |
+          mkdir -p data ota-state
+          sudo chown 10001:10001 data
+          docker compose -p islevetah build
+          docker compose -p islevetah up -d
+          python tests/verify_docker.py
+      - name: Container diagnostics on failure
+        if: failure()
+        run: docker compose -p islevetah logs --tail 60
+        env:
+          OTA_INTERNAL_TOKEN: ci-isolated-test-token
+      - name: Stop test containers
+        if: always()
+        run: docker compose -p islevetah down
+        env:
+          OTA_INTERNAL_TOKEN: ci-isolated-test-token

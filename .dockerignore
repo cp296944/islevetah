@@ -1,0 +1,7 @@
+.git
+data
+.env
+__pycache__
+tests
+deploy
+*.zip

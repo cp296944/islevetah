@@ -1,0 +1,39 @@
+services:
+  app:
+    build:
+      context: .
+      args:
+        APP_VERSION: ${APP_VERSION:-development}
+    image: islevetah-app:local
+    container_name: islevetah-app
+    restart: unless-stopped
+    ports:
+      - "7788:7788"
+    environment:
+      INVENTORY_DB: /data/inventory.db
+      OTA_INTERNAL_TOKEN: ${OTA_INTERNAL_TOKEN:?Generate .env using deploy/init_env.py}
+      INVENTORY_SECURE_COOKIE: ${INVENTORY_SECURE_COOKIE:-0}
+    volumes:
+      - ./data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+  ota:
+    build:
+      context: ./ota
+    image: islevetah-ota:local
+    container_name: islevetah-ota
+    restart: unless-stopped
+    environment:
+      OTA_INTERNAL_TOKEN: ${OTA_INTERNAL_TOKEN:?Generate .env using deploy/init_env.py}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data:/data
+      - ./ota-state:/state
+    read_only: true
+    tmpfs:
+      - /tmp:exec

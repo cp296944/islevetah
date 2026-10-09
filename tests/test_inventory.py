@@ -29,6 +29,12 @@ class EstimateTests(unittest.TestCase):
         at=datetime(2026,5,2,tzinfo=TZ)
         self.assertEqual(estimate(rows,at)['status'],'normal')
         self.assertEqual(estimate(rows,at+timedelta(seconds=1))['status'],'warning')
+    def test_configurable_warning_boundary(self):
+        rows=self.rows([60,50],[0,1])
+        at=datetime(2026,5,2,tzinfo=TZ)
+        self.assertEqual(estimate(rows,at,low_stock_days=6)['status'],'warning')
+        self.assertEqual(estimate(rows,at,low_stock_days=5)['status'],'normal')
+        self.assertEqual(estimate(rows,at,low_stock_days=3)['status'],'normal')
     def test_recent_six_intervals(self):
         e=estimate(self.rows([100,50,49,48,47,46,45,44],list(range(8))))
         self.assertEqual(e['daily'],1)

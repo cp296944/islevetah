@@ -53,6 +53,36 @@ class APITests(unittest.TestCase):
     def product(self):
         self.assertEqual(self.call('/api/products',{'name':'30CC 針筒','unit':'支','barcode':'123'})[0],200)
         return self.call('/api/state')[1]['products'][0]['id']
+    def test_settings_validation_persistence_and_permissions(self):
+        self.login()
+        self.assertEqual(self.call('/api/settings',{'low_stock_days':5})[0],200)
+        for value in (0,366,True,2.5,'7',None):
+            self.assertEqual(self.call('/api/settings',{'low_stock_days':value})[0],400)
+        self.assertEqual(self.call('/api/settings',{'low_stock_days':7})[0],200)
+        server.initialize()
+        self.assertEqual(self.call('/api/settings')[1]['low_stock_days'],7)
+        self.assertEqual(self.call('/api/state')[1]['settings']['low_stock_days'],7)
+        with server.connect() as db:
+            db.execute('UPDATE users SET admin=0,permissions=?', ('["inventory.view"]',))
+        self.assertEqual(self.call('/api/settings')[0],403)
+        self.assertEqual(self.call('/api/settings',{'low_stock_days':9})[0],403)
+        with server.connect() as db:
+            db.execute("UPDATE settings SET value=5 WHERE key='low_stock_days'")
+
+    def test_historical_counts_follow_current_name_with_legacy_fallback(self):
+        self.login()
+        pid=self.product()
+        self.assertEqual(self.call('/api/counts',dict(counted_at='2026-05-01T09:00+08:00',items=[dict(product_id=pid,quantity=10)]))[0],200)
+        with server.connect() as db:
+            db.execute("UPDATE users SET full_name='山豬大大' WHERE username='admin'")
+        state=self.call('/api/state')[1]
+        self.assertEqual(state['counts'][0]['person'],'山豬大大')
+        self.assertEqual(state['counts'][0]['original_person'],'管理員')
+        self.assertEqual(state['products'][0]['estimate']['latest']['person'],'山豬大大')
+        with server.connect() as db:
+            db.execute('UPDATE counts SET user_id=NULL')
+        self.assertEqual(self.call('/api/state')[1]['counts'][0]['person'],'管理員')
+
     def test_count_corrections_permissions_audit_and_conflicts(self):
         self.login()
         pid=self.product()

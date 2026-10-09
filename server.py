@@ -107,6 +107,8 @@ def initialize():
         CREATE TABLE IF NOT EXISTS product_options(kind TEXT NOT NULL CHECK(kind IN ('unit','category')),value TEXT NOT NULL,PRIMARY KEY(kind,value));
         INSERT OR IGNORE INTO product_options SELECT 'unit',trim(unit) FROM products WHERE trim(unit)!='';
         INSERT OR IGNORE INTO product_options SELECT 'category',trim(category) FROM products WHERE trim(category)!='';
+        CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value INTEGER NOT NULL);
+        INSERT OR IGNORE INTO settings VALUES('low_stock_days',5);
         CREATE TABLE IF NOT EXISTS counts(id INTEGER PRIMARY KEY, product_id INTEGER NOT NULL REFERENCES products(id), quantity REAL NOT NULL CHECK(quantity>=0), person TEXT NOT NULL, counted_at TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, UNIQUE(product_id,counted_at));
         CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,username TEXT UNIQUE NOT NULL,password TEXT NOT NULL,full_name TEXT NOT NULL,email TEXT NOT NULL DEFAULT '',phone TEXT NOT NULL DEFAULT '',admin INTEGER NOT NULL DEFAULT 0,active INTEGER NOT NULL DEFAULT 0,approval TEXT NOT NULL DEFAULT 'pending',must_change INTEGER NOT NULL DEFAULT 0,permissions TEXT NOT NULL DEFAULT '[]',created_at INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,user_id INTEGER NOT NULL REFERENCES users(id),csrf TEXT NOT NULL,expires INTEGER NOT NULL);
@@ -165,7 +167,7 @@ def manage_product_option(db, user, data):
         db.execute('DELETE FROM product_options WHERE kind=? AND value=?',(kind,value))
     audit(db,user['id'],'product_option_'+action,json.dumps(dict(kind=kind,value=value,target=target,affected=affected),ensure_ascii=False))
 
-def estimate(records, now=None):
+def estimate(records, now=None, low_stock_days=5):
     now = now or datetime.now(TZ)
     rows = sorted(records, key=lambda r: parse_date(r['counted_at']))
     valid, excluded = [], 0
@@ -190,7 +192,7 @@ def estimate(records, now=None):
             status = 'empty'
         elif daily and daily > 0:
             depletion = parse_date(latest['counted_at']) + timedelta(days=latest['quantity']/daily)
-            status = 'overdue' if depletion <= now else ('warning' if (depletion-now).total_seconds() < 5*86400 else 'normal')
+            status = 'overdue' if depletion <= now else ('warning' if (depletion-now).total_seconds() < low_stock_days*86400 else 'normal')
         elif daily == 0:
             status = 'stable'
         if depletion:
@@ -355,6 +357,13 @@ class Handler(BaseHTTPRequestHandler):
                     if not user['admin']:
                         raise APIError(403,'僅管理員可查看更新')
                     return self.reply(200,ota_request('cleanup-preview' if path.endswith('/cleanup-preview') else 'status'))
+                if path=='/api/settings':
+                    self.require(user)
+                    if not user['admin']:
+                        raise APIError(403,'僅管理員可查看系統設定')
+                    with connect() as db:
+                        days=db.execute("SELECT value FROM settings WHERE key='low_stock_days'").fetchone()[0]
+                    return self.reply(200,{'low_stock_days':days})
                 if path=='/api/accounts':
                     self.require(user)
                     if not user['admin']:
@@ -367,7 +376,10 @@ class Handler(BaseHTTPRequestHandler):
                     self.require(user,'inventory.view')
                     with connect() as db:
                         products = [dict(r) for r in db.execute('SELECT * FROM products ORDER BY id DESC')]
-                        counts = [dict(r) for r in db.execute('SELECT * FROM counts ORDER BY counted_at DESC')]
+                        counts = [dict(r) for r in db.execute("SELECT c.*,c.person AS original_person,COALESCE(NULLIF(u.full_name,''),u.username,c.person) AS current_person FROM counts c LEFT JOIN users u ON u.id=c.user_id ORDER BY c.counted_at DESC")]
+                        days=db.execute("SELECT value FROM settings WHERE key='low_stock_days'").fetchone()[0]
+                        for r in counts:
+                            r['person']=r.pop('current_person')
                         revisions = {}
                         for revision in db.execute('SELECT cr.*,u.full_name AS actor_name FROM count_revisions cr JOIN users u ON u.id=cr.actor ORDER BY cr.id DESC'):
                             revisions.setdefault(revision['count_id'],[]).append(dict(revision))
@@ -375,8 +387,8 @@ class Handler(BaseHTTPRequestHandler):
                             r['revisions'] = revisions.get(r['id'],[])
                         options = {kind: [r['value'] for r in db.execute('SELECT value FROM product_options WHERE kind=? ORDER BY value',(kind,))] for kind in ('unit','category')}
                     for p in products:
-                        p['estimate'] = estimate([r for r in counts if r['product_id']==p['id']])
-                    return self.reply(200, dict(products=products, counts=counts, options=options))
+                        p['estimate'] = estimate([r for r in counts if r['product_id']==p['id']],low_stock_days=days)
+                    return self.reply(200, dict(products=products, counts=counts, options=options, settings=dict(low_stock_days=days)))
                 return self.reply(404, {'error':'找不到資料'})
             except APIError as e:
                 return self.reply(e.status,{'error':e.message})
@@ -442,6 +454,16 @@ class Handler(BaseHTTPRequestHandler):
                     audit(db,user['id'],'password_changed')
                 return self.session_response({'ok':True},COOKIE+'=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0')
             self.require(user)
+            if path=='/api/settings':
+                if not user['admin']:
+                    raise APIError(403,'僅管理員可修改系統設定')
+                days=data.get('low_stock_days')
+                if type(days) is not int or not 1 <= days <= 365:
+                    raise APIError(400,'提醒天數須為 1 至 365 的整數')
+                with connect() as db:
+                    db.execute("UPDATE settings SET value=? WHERE key='low_stock_days'",(days,))
+                    audit(db,user['id'],'settings_update',str(days))
+                return self.reply(200,{'ok':True})
             if path in ('/api/ota/check','/api/ota/apply','/api/ota/cleanup'):
                 if not user['admin']:
                     raise APIError(403,'僅管理員可執行更新')

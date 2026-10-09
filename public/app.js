@@ -118,7 +118,7 @@ if(digest&&otaReleaseLoading===digest)return;
 if(digest){otaReleaseLoading=digest;$('#ota-release-notes').disabled=true;$('#ota-notes-status').textContent='正在讀取本版更新內容…'}
 try{
 const notes=await api('ota/release-notes'+(digest?'?digest='+encodeURIComponent(digest):''));
-if(!$('#ota-release-history')||(digest&&otaState?.latest!==digest)||(!digest&&otaState?.latest))return;
+if(!$('#ota-release-history')||(digest&&otaState?.latest!==digest)||(!digest&&otaReleaseNotes&&otaReleaseDigest===otaState?.latest))return;
 paintReleaseHistory(notes);
 if(digest){otaReleaseNotes=notes;otaReleaseDigest=digest;$('#ota-release-notes').disabled=false;$('#ota-notes-status').textContent=''}
 }catch(err){if($('#ota-notes-status'))$('#ota-notes-status').textContent=err.message;if(!digest&&$('#ota-release-history'))$('#ota-release-history').textContent='暫時無法讀取更新紀錄。'}

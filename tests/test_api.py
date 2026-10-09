@@ -261,6 +261,18 @@ class APITests(unittest.TestCase):
         with self.assertRaises(HTTPError) as e:
             self.client.open(req)
         self.assertEqual(e.exception.code,403)
+    def test_html_uses_content_versioned_assets(self):
+        import hashlib
+        with self.client.open(self.url+'/') as response:
+            html=response.read().decode()
+            self.assertIn('no-store',response.headers['Cache-Control'])
+        for asset in ('app.js','style.css'):
+            digest=hashlib.sha256((server.ROOT/'public'/asset).read_bytes()).hexdigest()[:16]
+            url='/'+asset+'?v='+digest
+            self.assertIn(url,html)
+            with self.client.open(self.url+url) as response:
+                self.assertEqual(response.read(),(server.ROOT/'public'/asset).read_bytes())
+
     def test_assets(self):
         for path in ['/','/style.css','/app.js']:
             with self.client.open(self.url+path) as r:

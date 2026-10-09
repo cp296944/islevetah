@@ -451,6 +451,10 @@ class Handler(BaseHTTPRequestHandler):
         if path not in assets:
             return self.reply(404, {'error':'找不到頁面'})
         raw = (ROOT/'public'/assets[path]).read_bytes()
+        if path == '/':
+            for asset in ('app.js','style.css'):
+                digest=hashlib.sha256((ROOT/'public'/asset).read_bytes()).hexdigest()[:16]
+                raw=raw.replace(('"/'+asset+'"').encode(), ('"/'+asset+'?v='+digest+'"').encode())
         self.send_response(200)
         self.send_header('Content-Type', {'/':'text/html; charset=utf-8','/app.js':'text/javascript; charset=utf-8','/style.css':'text/css; charset=utf-8'}[path])
         self.send_header('Cache-Control','no-store, max-age=0')

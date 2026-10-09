@@ -107,12 +107,30 @@ function bindAccounts(){$('#new-account')?.addEventListener('click',()=>openAcco
 $('#close-account').onclick=()=>$('#account-dialog').close();
 $('#account-form').onsubmit=async e=>{e.preventDefault();const f=e.target;const data=Object.fromEntries(new FormData(f));data.permissions=new FormData(f).getAll('permission');data.admin=f.elements.admin.checked;data.active=f.elements.active.checked;data.action=data.id?e.submitter.value:'create';const button=e.submitter;button.disabled=true;try{await api('accounts',data);$('#account-dialog').close();await load();notice(data.action==='profile'?'帳號資料已儲存。改名後該帳號須重新登入。':'帳號設定已儲存。')}catch(err){$('#account-error').textContent=err.message}finally{button.disabled=false}};
 $('#reset-form').onsubmit=async e=>{e.preventDefault();const button=e.target.querySelector('button:not([type])');button.disabled=true;try{await api('accounts',{action:'reset',id:$('#account-form').elements.id.value,password:e.target.password.value});$('#account-dialog').close();await load();notice('密碼已重設，該帳號下次登入須修改密碼。')}catch(err){$('#reset-error').textContent=err.message}finally{button.disabled=false}};
-function paintOTA(data){otaState=data;if(!$('#ota-current'))return;const short=v=>v?(v.startsWith('sha256:')?v.slice(0,19):v.slice(0,12))+'…':'尚未檢查';$('#ota-current').textContent=short(data.current);$('#ota-latest').textContent=short(data.latest);const job=data.job;const results={success:'完成',failed:'更新失敗',rolled_back:'已還原',recovery_failed:'還原失敗',interrupted:'更新中斷，需人工確認'};const stages={waiting:'等待',downloading:'下載映像',preserving:'保留上一版',restarting:'重啟',verifying:'確認正常',completed:'完成'};$('#ota-status').textContent=job?.running?`app：${stages[job.stage]||job.message}；已完成 ${job.completed_services||0}/1；已下載 ${((job.download_bytes||0)/1048576).toFixed(1)} MB；經過 ${job.elapsed_seconds||0} 秒`:`${results[job?.result]||''} ${job?.message||''} ${data.latest?(data.update_available?'可更新':'已是最新'):'尚未檢查遠端版本'}`;$('#ota-details').textContent=JSON.stringify({current:data.current,latest:data.latest,job},null,2);$('#apply-update').disabled=!data.update_available||!!job?.running||['interrupted','recovery_failed'].includes(job?.result);$('#check-update').disabled=!!job?.running;if(job?.running){clearTimeout(otaTimer);otaTimer=setTimeout(pollOTA,3000)}}
+let otaPendingJob=null;
+try{otaPendingJob=sessionStorage.getItem('ota-pending-job')}catch{}
+function trackOTAJob(id){
+if(!id)return;
+otaPendingJob=id;
+try{sessionStorage.setItem('ota-pending-job',id)}catch{}
+}
+function finishOTAJob(job){
+if(!job?.id||job.running||job.id!==otaPendingJob)return;
+otaPendingJob=null;
+try{sessionStorage.removeItem('ota-pending-job')}catch{}
+if(job.result!=='success')return;
+clearTimeout(otaTimer);
+window.alert('更新已完成');
+const url=new URL(window.location.href);
+url.searchParams.set('_ota',job.id+'-'+Date.now());
+window.location.replace(url.href);
+}
+function paintOTA(data){otaState=data;if(!$('#ota-current'))return;const short=v=>v?(v.startsWith('sha256:')?v.slice(0,19):v.slice(0,12))+'…':'尚未檢查';$('#ota-current').textContent=short(data.current);$('#ota-latest').textContent=short(data.latest);const job=data.job;if(job?.running)trackOTAJob(job.id);finishOTAJob(job);const results={success:'完成',failed:'更新失敗',rolled_back:'已還原',recovery_failed:'還原失敗',interrupted:'更新中斷，需人工確認'};const stages={waiting:'等待',downloading:'下載映像',preserving:'保留上一版',restarting:'重啟',verifying:'確認正常',completed:'完成'};$('#ota-status').textContent=job?.running?`app：${stages[job.stage]||job.message}；已完成 ${job.completed_services||0}/1；已下載 ${((job.download_bytes||0)/1048576).toFixed(1)} MB；經過 ${job.elapsed_seconds||0} 秒`:`${results[job?.result]||''} ${job?.message||''} ${data.latest?(data.update_available?'可更新':'已是最新'):'尚未檢查遠端版本'}`;$('#ota-details').textContent=JSON.stringify({current:data.current,latest:data.latest,job},null,2);$('#apply-update').disabled=!data.update_available||!!job?.running||['interrupted','recovery_failed'].includes(job?.result);$('#check-update').disabled=!!job?.running;if(job?.running){clearTimeout(otaTimer);otaTimer=setTimeout(pollOTA,3000)}}
 async function pollOTA(){if(page!=='ota'||maintenanceTab!=='ota')return;try{paintOTA(await api('ota/status'))}catch(err){if(!me||page!=='ota')return;if(page==='ota'){if($('#ota-status'))$('#ota-status').textContent='更新重啟中，稍後重新連線…';otaTimer=setTimeout(pollOTA,5000)}else{if($('#ota-status'))$('#ota-status').textContent=err.message}}}
 function bindOTA(){if(page!=='ota'||maintenanceTab!=='ota')return;
 $('#preview-cleanup').onclick=async()=>{try{const preview=await api('ota/cleanup-preview');$('#cleanup-preview').textContent=`可清理 ${preview.images.length} 個映像，預估 ${(preview.estimated_bytes/1048576).toFixed(1)} MB；${preview.note}；需人工確認 ${preview.manual_review.length} 個映像。`;$('#ota-details').textContent=JSON.stringify(preview,null,2);$('#run-cleanup').hidden=!preview.images.length}catch(err){$('#ota-error').textContent=err.message}};
 $('#run-cleanup').onclick=async()=>{try{await api('ota/cleanup',{password:$('#ota-form').password.value});$('#ota-form').password.value='';$('#run-cleanup').hidden=true;$('#cleanup-preview').textContent='清理完成，請重新預覽確認。'}catch(err){$('#ota-error').textContent=err.message}};
-$('#check-update').onclick=async()=>{const b=$('#check-update');b.disabled=true;$('#ota-error').textContent='';try{paintOTA(await api('ota/check',{}))}catch(err){$('#ota-error').textContent=err.message}finally{b.disabled=false}};$('#ota-form').onsubmit=async e=>{e.preventDefault();$('#apply-update').disabled=true;try{await api('ota/apply',{password:e.target.password.value});e.target.reset();await pollOTA()}catch(err){$('#ota-error').textContent=err.message;$('#apply-update').disabled=!otaState?.update_available}};pollOTA()}
+$('#check-update').onclick=async()=>{const b=$('#check-update');b.disabled=true;$('#ota-error').textContent='';try{paintOTA(await api('ota/check',{}))}catch(err){$('#ota-error').textContent=err.message}finally{b.disabled=false}};$('#ota-form').onsubmit=async e=>{e.preventDefault();$('#apply-update').disabled=true;try{const task=await api('ota/apply',{password:e.target.password.value});trackOTAJob(task.job_id);e.target.reset();await pollOTA()}catch(err){$('#ota-error').textContent=err.message;$('#apply-update').disabled=!otaState?.update_available}};pollOTA()}
 bindPasswords();
 
 function profileAuditText(target){try{const d=JSON.parse(target);return d.old_username===d.username?d.username:d.old_username+' → '+d.username}catch{return target}}

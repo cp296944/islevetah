@@ -400,6 +400,7 @@ class Handler(BaseHTTPRequestHandler):
         raw = (ROOT/'public'/assets[path]).read_bytes()
         self.send_response(200)
         self.send_header('Content-Type', {'/':'text/html; charset=utf-8','/app.js':'text/javascript; charset=utf-8','/style.css':'text/css; charset=utf-8'}[path])
+        self.send_header('Cache-Control','no-store, max-age=0')
         self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; frame-ancestors 'none'")
         self.send_header('X-Content-Type-Options','nosniff')
         self.end_headers()

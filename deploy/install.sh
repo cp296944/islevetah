@@ -35,7 +35,7 @@ $COMPOSE -p islevetah -f docker-compose.yml config --quiet
 $COMPOSE -p islevetah -f docker-compose.yml build
 if [ -f data/inventory.db ]; then
   $COMPOSE -p islevetah -f docker-compose.yml stop app
-  docker run --rm -v "$PROJECT/data:/data" --entrypoint python islevetah-app:local -c "import sqlite3,time,os; from pathlib import Path; p=Path('/data/backups'); p.mkdir(exist_ok=True); s=sqlite3.connect('/data/inventory.db'); path=p/('deploy_'+str(int(time.time()))+'.db'); d=sqlite3.connect(path); s.backup(d);d.close();s.close();os.chmod(path,0o600)"
+  docker run --rm --user 0:0 -v "$PROJECT/data:/data" --entrypoint python islevetah-app:local -c "import sqlite3,time,os; from pathlib import Path; p=Path('/data/backups'); p.mkdir(mode=0o700,exist_ok=True); s=sqlite3.connect('/data/inventory.db'); path=p/('deploy_'+str(int(time.time()))+'.db'); d=sqlite3.connect(path); s.backup(d);d.close();s.close();os.chmod(path,0o600)"
 fi
 $COMPOSE -p islevetah -f docker-compose.yml up -d --no-build
 ATTEMPT=0

@@ -15,7 +15,7 @@ class APITests(unittest.TestCase):
     def setUpClass(cls):
         cls.temp = tempfile.TemporaryDirectory()
         server.DB = Path(cls.temp.name)/'test.db'
-        
+
         server.initialize()
         cls.http = ThreadingHTTPServer(('127.0.0.1',0),server.Handler)
         cls.thread = threading.Thread(target=cls.http.serve_forever,daemon=True)

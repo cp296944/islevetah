@@ -52,6 +52,34 @@ class APITests(unittest.TestCase):
     def product(self):
         self.assertEqual(self.call('/api/products',{'name':'30CC 針筒','unit':'支','barcode':'123'})[0],200)
         return self.call('/api/state')[1]['products'][0]['id']
+    def test_product_create_options_delete(self):
+        self.login()
+        for name in ('第一項','第二項'):
+            self.assertEqual(self.call('/api/products',dict(action='create',name=name,unit='支',category='醫療耗材'))[0],200)
+        state=self.call('/api/state')[1]
+        self.assertEqual({p['name'] for p in state['products']},{'第一項','第二項'})
+        self.assertIn('支',state['options']['unit'])
+        self.assertEqual(state['options']['category'].count('醫療耗材'),1)
+        pid=state['products'][0]['id']
+        self.assertEqual(self.call('/api/products',dict(action='create',id=pid,name='覆寫',unit='支'))[0],400)
+        self.assertEqual(self.call('/api/products',dict(action='update',name='無 ID',unit='支'))[0],400)
+        self.assertEqual(self.call('/api/products/delete',dict(id=pid))[0],200)
+        state=self.call('/api/state')[1]
+        self.assertEqual(len(state['products']),1)
+        self.assertIn('醫療耗材',state['options']['category'])
+        self.assertEqual(self.call('/api/products/delete',dict(id=pid))[0],404)
+        with server.connect() as db:
+            self.assertIsNotNone(db.execute("SELECT 1 FROM audit WHERE action='product_delete'").fetchone())
+    def test_product_delete_preserves_counts(self):
+        self.login()
+        pid=self.product()
+        self.assertEqual(self.call('/api/counts',dict(counted_at='2026-05-01T09:00+08:00',items=[dict(product_id=pid,quantity=5)]))[0],200)
+        status,result=self.call('/api/products/delete',dict(id=pid))
+        self.assertEqual(status,409)
+        self.assertIn('停用',result['error'])
+        state=self.call('/api/state')[1]
+        self.assertEqual(len(state['products']),1)
+        self.assertEqual(len(state['counts']),1)
     def test_authentication(self):
         self.assertEqual(self.call('/api/state')[0],401)
         self.assertEqual(self.call('/api/login',{'username':'admin','password':'wrong'})[0],401)
@@ -119,6 +147,7 @@ class APITests(unittest.TestCase):
         self.assertEqual(self.call('/api/state')[0],200)
         self.assertEqual(self.call('/api/accounts')[0],403)
         self.assertEqual(self.call('/api/products',{'name':'無權限','unit':'支'})[0],403)
+        self.assertEqual(self.call('/api/products/delete',{'id':1})[0],403)
         self.assertEqual(self.call('/api/ota/check',{})[0],403)
     def test_password_minimum_and_forced_change(self):
         self.login()

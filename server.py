@@ -104,6 +104,9 @@ def initialize():
         db.executescript("""
         CREATE TABLE IF NOT EXISTS products(id INTEGER PRIMARY KEY, barcode TEXT NOT NULL DEFAULT '', name TEXT NOT NULL, unit TEXT NOT NULL, category TEXT NOT NULL DEFAULT '', location TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1);
         CREATE UNIQUE INDEX IF NOT EXISTS barcode_unique ON products(barcode) WHERE barcode != '';
+        CREATE TABLE IF NOT EXISTS product_options(kind TEXT NOT NULL CHECK(kind IN ('unit','category')),value TEXT NOT NULL,PRIMARY KEY(kind,value));
+        INSERT OR IGNORE INTO product_options SELECT 'unit',trim(unit) FROM products WHERE trim(unit)!='';
+        INSERT OR IGNORE INTO product_options SELECT 'category',trim(category) FROM products WHERE trim(category)!='';
         CREATE TABLE IF NOT EXISTS counts(id INTEGER PRIMARY KEY, product_id INTEGER NOT NULL REFERENCES products(id), quantity REAL NOT NULL CHECK(quantity>=0), person TEXT NOT NULL, counted_at TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, UNIQUE(product_id,counted_at));
         CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,username TEXT UNIQUE NOT NULL,password TEXT NOT NULL,full_name TEXT NOT NULL,email TEXT NOT NULL DEFAULT '',phone TEXT NOT NULL DEFAULT '',admin INTEGER NOT NULL DEFAULT 0,active INTEGER NOT NULL DEFAULT 0,approval TEXT NOT NULL DEFAULT 'pending',must_change INTEGER NOT NULL DEFAULT 0,permissions TEXT NOT NULL DEFAULT '[]',created_at INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,user_id INTEGER NOT NULL REFERENCES users(id),csrf TEXT NOT NULL,expires INTEGER NOT NULL);
@@ -321,9 +324,10 @@ class Handler(BaseHTTPRequestHandler):
                     with connect() as db:
                         products = [dict(r) for r in db.execute('SELECT * FROM products ORDER BY id DESC')]
                         counts = [dict(r) for r in db.execute('SELECT * FROM counts ORDER BY counted_at DESC')]
+                        options = {kind: [r['value'] for r in db.execute('SELECT value FROM product_options WHERE kind=? ORDER BY value',(kind,))] for kind in ('unit','category')}
                     for p in products:
                         p['estimate'] = estimate([r for r in counts if r['product_id']==p['id']])
-                    return self.reply(200, dict(products=products, counts=counts))
+                    return self.reply(200, dict(products=products, counts=counts, options=options))
                 return self.reply(404, {'error':'找不到資料'})
             except APIError as e:
                 return self.reply(e.status,{'error':e.message})
@@ -403,9 +407,17 @@ class Handler(BaseHTTPRequestHandler):
                     raise APIError(403,'僅管理員可管理帳戶')
                 self.account_action(user,data)
                 return self.reply(200,{'ok':True})
-            self.require(user,{'/api/products':'products.manage','/api/counts':'counts.manage'}.get(path,'invalid'))
+            self.require(user,{'/api/products':'products.manage','/api/products/delete':'products.manage','/api/counts':'counts.manage'}.get(path,'invalid'))
             with connect() as db:
+                db.execute('BEGIN IMMEDIATE')
                 if path == '/api/products':
+                    action = data.get('action')
+                    if action not in (None,'create','update'):
+                        raise APIError(400,'無效的商品操作')
+                    if action == 'create' and data.get('id'):
+                        raise APIError(400,'新增商品不得包含既有商品 ID')
+                    if action == 'update' and not data.get('id'):
+                        raise APIError(400,'編輯商品必須指定商品 ID')
                     fields = [str(data.get(k,'')).strip() for k in ['barcode','name','unit','category','location','note']]
                     if not fields[1] or not fields[2] or any(len(f)>1000 for f in fields):
                         raise ValueError('請填寫品名、單位，欄位不得超過 1000 字')
@@ -417,7 +429,19 @@ class Handler(BaseHTTPRequestHandler):
                             raise ValueError('已有盤點紀錄不可更換單位')
                         db.execute('UPDATE products SET barcode=?,name=?,unit=?,category=?,location=?,note=?,active=? WHERE id=?', (*fields,int(bool(data.get('active',True))),int(data['id'])))
                     else:
-                        db.execute('INSERT INTO products(barcode,name,unit,category,location,note) VALUES(?,?,?,?,?,?)',fields)
+                        db.execute('INSERT INTO products(barcode,name,unit,category,location,note,active) VALUES(?,?,?,?,?,?,?)',(*fields,int(bool(data.get('active',True)))))
+                    for kind,value in [('unit',fields[2]),('category',fields[3])]:
+                        if value:
+                            db.execute('INSERT OR IGNORE INTO product_options(kind,value) VALUES(?,?)',(kind,value))
+                elif path == '/api/products/delete':
+                    pid = int(data['id'])
+                    product = db.execute('SELECT name FROM products WHERE id=?',(pid,)).fetchone()
+                    if not product:
+                        raise APIError(404,'商品不存在或已刪除')
+                    if db.execute('SELECT 1 FROM counts WHERE product_id=? LIMIT 1',(pid,)).fetchone():
+                        raise APIError(409,'已有盤點紀錄的商品不可刪除，請改用停用以保留歷史紀錄')
+                    db.execute('DELETE FROM products WHERE id=?',(pid,))
+                    audit(db,user['id'],'product_delete',json.dumps({'id':pid,'name':product['name']},ensure_ascii=False))
                 elif path == '/api/counts':
                     person = user['full_name'] or user['username']
                     at = parse_date(data['counted_at'])

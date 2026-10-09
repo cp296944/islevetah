@@ -3,3 +3,7 @@
 .password-row{display:flex;gap:8px;align-items:flex-start}.password-row input{min-width:0}.password-row button{margin-top:7px;white-space:nowrap;width:auto}.check-label{display:flex;align-items:center;gap:9px;margin:12px 0}.check-label input{width:auto;margin:0}fieldset{border:1px solid #dce3d7;border-radius:7px;margin:15px 0;padding:15px}legend{font-size:13px;color:#657662}.account-actions{display:flex;gap:8px;flex-wrap:wrap}#reset-form{border-top:1px solid #dce3d7;margin-top:26px;padding-top:24px}.narrow{max-width:600px}#current-user{font-size:13px;color:#536b59}#register-form h2{margin:22px 0 12px}#login{padding:24px 0}#show-register{margin-top:12px}.login-box{width:min(440px,calc(100% - 32px))}#ota-form{max-width:480px}@media(max-width:700px){nav{grid-template-columns:repeat(4,1fr)}#current-user{width:100%;text-align:right;font-size:11px}.header-actions{max-width:190px}.account-actions button{flex:1}}
 
 .account-name{padding:0;font-weight:700;text-decoration:underline;text-underline-offset:3px}
+
+.product-actions{display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap}.delete-button{color:#b43b35;border-color:#e4bdb8}
+
+.sort-button{background:transparent;color:inherit;font-weight:500;padding:0;border:0;display:inline-flex;align-items:center;gap:8px}.sort-button span{color:#28664f;font-size:14px}

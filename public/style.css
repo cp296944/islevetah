@@ -14,3 +14,5 @@
 @media(max-width:700px){#count-form{padding-bottom:78px}.count-save{position:fixed;left:0;right:0;bottom:0;z-index:10;padding-bottom:max(14px,env(safe-area-inset-bottom))}}
 
 .release-notes-text{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.8;margin:14px 0}#ota-release-history details{padding:12px 0;border-bottom:1px solid #dce3d7}#ota-release-history summary{cursor:pointer}#ota-release-dialog{width:min(680px,calc(100% - 32px));max-height:85vh;overflow:auto}
+
+.toolbar.maintenance-tabs{justify-content:flex-start;flex-wrap:wrap;gap:12px}
